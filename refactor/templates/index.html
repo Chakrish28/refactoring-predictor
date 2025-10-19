@@ -100,17 +100,20 @@
                 // 4. Populate the results and show them
                 // Handle different response structures
                 const finalCode = result.final_code || result.code || 'No code returned';
-                const status = result.status || 'unknown';
+                const status = result.status || 'no_refactor';
+                const confidence = result.confidence || 0;
                 
                 resultCode.textContent = finalCode;
-                statusBadge.textContent = status.charAt(0).toUpperCase() + status.slice(1);
                 
                 if (status === 'refactored') {
+                    statusBadge.textContent = 'Refactored';
                     statusBadge.className = 'status-badge status-refactored';
                 } else if (status === 'ok') {
+                    statusBadge.textContent = 'Ok';
                     statusBadge.className = 'status-badge status-ok';
                 } else {
-                    statusBadge.className = 'status-badge status-refactored';
+                    statusBadge.textContent = `No Refactor Needed (Confidence: ${confidence}%)`;
+                    statusBadge.className = 'status-badge status-ok';
                 }
                 
             } catch (error) {
