@@ -98,13 +98,19 @@
                 const result = await response.json();
 
                 // 4. Populate the results and show them
-                resultCode.textContent = result.final_code;
-                statusBadge.textContent = result.status.charAt(0).toUpperCase() + result.status.slice(1);
+                // Handle different response structures
+                const finalCode = result.final_code || result.code || 'No code returned';
+                const status = result.status || 'unknown';
                 
-                if (result.status === 'refactored') {
+                resultCode.textContent = finalCode;
+                statusBadge.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+                
+                if (status === 'refactored') {
                     statusBadge.className = 'status-badge status-refactored';
-                } else {
+                } else if (status === 'ok') {
                     statusBadge.className = 'status-badge status-ok';
+                } else {
+                    statusBadge.className = 'status-badge status-refactored';
                 }
                 
             } catch (error) {
@@ -122,6 +128,3 @@
 
 </body>
 </html>
-
-
-
