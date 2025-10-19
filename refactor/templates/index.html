@@ -16,7 +16,7 @@
         button { display: block; width: 100%; padding: 15px; font-size: 1.1em; font-weight: 600; color: #fff; background-color: #0984e3; border: none; border-radius: 8px; cursor: pointer; margin-top: 20px; transition: background-color 0.3s, transform 0.1s; }
         button:hover { background-color: #0a73c9; }
         button:active { transform: scale(0.99); }
-        .result-container { display: none; /* Hidden by default */ }
+        .result-container { display: none; }
         pre { background-color: #fdfdfd; white-space: pre-wrap; word-wrap: break-word; }
         .loader { display: none; text-align: center; padding: 40px; }
         .loader div { width: 12px; height: 12px; background-color: #0984e3; border-radius: 100%; display: inline-block; animation: sk-bouncedelay 1.4s infinite ease-in-out both; }
@@ -26,6 +26,10 @@
         .status-badge { padding: 5px 12px; border-radius: 15px; color: #fff; font-size: 0.9em; font-weight: 600; }
         .status-ok { background-color: #27ae60; }
         .status-refactored { background-color: #e67e22; }
+        .issues-list { background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 15px 0; border-radius: 4px; }
+        .issues-list h3 { margin-top: 0; color: #856404; font-size: 1em; }
+        .issues-list ul { margin: 10px 0 0 0; padding-left: 20px; }
+        .issues-list li { color: #856404; margin: 5px 0; }
     </style>
 </head>
 <body>
@@ -41,26 +45,22 @@
             </form>
         </div>
 
-        <!-- This is the loading spinner -->
         <div id="loader" class="loader card">
             <div class="bounce1"></div>
             <div class="bounce2"></div>
             <div class="bounce3"></div>
-            <p style="margin-top: 20px; font-size: 1em;">Analyzing... This may take a few seconds.</p>
+            <p style="margin-top: 20px; font-size: 1em;">Analyzing with AI... This may take a few seconds.</p>
         </div>
 
-        <!-- This container will appear with the result -->
         <div id="result-container" class="result-container card">
             <h2>Result <span id="status-badge" class="status-badge"></span></h2>
+            <div id="issues-container"></div>
             <pre><code id="result-code"></code></pre>
         </div>
     </div>
 
     <script>
-        // --- Configuration ---
-        // IMPORTANT: Replace this with your actual n8n Webhook URL
-        const n8nWebhookUrl = 'https://chakki28.app.n8n.cloud/webhook/f9b1092d-e40d-4792-b84d-a3afdca03557'; 
-        // -------------------
+        const n8nWebhookUrl = 'https://chakki28.app.n8n.cloud/webhook/f9b1092d-e40d-4792-b84d-a3afdca03557';
 
         const refactorForm = document.getElementById('refactor-form');
         const codeInput = document.getElementById('code-input');
@@ -68,9 +68,74 @@
         const resultContainer = document.getElementById('result-container');
         const statusBadge = document.getElementById('status-badge');
         const resultCode = document.getElementById('result-code');
+        const issuesContainer = document.getElementById('issues-container');
+
+        function analyzeCodeLocally(code) {
+            const issues = [];
+            let confidence = 100;
+
+            // Check for common code smells
+            if (code.match(/def\s+\w+\([^)]*\):\s*#[^#\n]*\n\s*pass/)) {
+                issues.push('Empty function definitions found');
+                confidence -= 15;
+            }
+
+            if (code.match(/def\s+\w+.*:\s*$/m) && !code.includes('pass')) {
+                issues.push('Incomplete function definitions');
+                confidence -= 20;
+            }
+
+            if (code.match(/^\s*#.*iloc/m) || code.match(/^\s*#.*TODO/m)) {
+                issues.push('Commented out code detected');
+                confidence -= 10;
+            }
+
+            const functionMatches = code.match(/def\s+(\w+)/g);
+            const functionCalls = code.match(/\b\w+\s*\(/g);
+            if (functionMatches) {
+                functionMatches.forEach(func => {
+                    const funcName = func.replace('def ', '');
+                    const callPattern = new RegExp(`\\b${funcName}\\s*\\(`, 'g');
+                    if (!code.match(callPattern) || code.match(callPattern).length === 1) {
+                        issues.push(`Unused function: ${funcName}`);
+                        confidence -= 10;
+                    }
+                });
+            }
+
+            if (code.includes('if') && code.includes('elif') && code.includes('else')) {
+                const complexConditions = code.match(/if.*:\s*if.*:/g);
+                if (complexConditions && complexConditions.length > 2) {
+                    issues.push('Complex nested conditions detected');
+                    confidence -= 10;
+                }
+            }
+
+            const lines = code.split('\n');
+            let longLines = 0;
+            lines.forEach(line => {
+                if (line.length > 120) longLines++;
+            });
+            if (longLines > 3) {
+                issues.push(`${longLines} lines exceed recommended length (120 chars)`);
+                confidence -= 5;
+            }
+
+            if (code.match(/except\s*:/)) {
+                issues.push('Bare except clauses found (should specify exception type)');
+                confidence -= 10;
+            }
+
+            confidence = Math.max(0, Math.min(100, confidence));
+
+            return {
+                needsRefactoring: confidence < 85,
+                confidence: confidence,
+                issues: issues
+            };
+        }
 
         refactorForm.addEventListener('submit', async (event) => {
-            // 1. Prevent the page from reloading
             event.preventDefault();
 
             const code = codeInput.value;
@@ -79,12 +144,26 @@
                 return;
             }
 
-            // 2. Hide old results and show the loader
             resultContainer.style.display = 'none';
+            loader.style.display = 'none';
+
+            // Analyze code locally first
+            const analysis = analyzeCodeLocally(code);
+
+            if (!analysis.needsRefactoring) {
+                // No refactoring needed - show result immediately
+                resultCode.textContent = code;
+                statusBadge.textContent = `No Refactoring Needed (Confidence: ${analysis.confidence}%)`;
+                statusBadge.className = 'status-badge status-ok';
+                issuesContainer.innerHTML = '';
+                resultContainer.style.display = 'block';
+                return;
+            }
+
+            // Code needs refactoring - call n8n
             loader.style.display = 'block';
 
             try {
-                // 3. Call the n8n Webhook
                 const response = await fetch(n8nWebhookUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -97,32 +176,32 @@
 
                 const result = await response.json();
 
-                // 4. Populate the results and show them
-                // Handle different response structures
-                const finalCode = result.final_code || result.code || 'No code returned';
-                const status = result.status || 'no_refactor';
-                const confidence = result.confidence || 0;
+                const finalCode = result.final_code || result.code || code;
                 
                 resultCode.textContent = finalCode;
+                statusBadge.textContent = 'Refactored by AI';
+                statusBadge.className = 'status-badge status-refactored';
                 
-                if (status === 'refactored') {
-                    statusBadge.textContent = 'Refactored';
-                    statusBadge.className = 'status-badge status-refactored';
-                } else if (status === 'ok') {
-                    statusBadge.textContent = 'Ok';
-                    statusBadge.className = 'status-badge status-ok';
+                if (analysis.issues.length > 0) {
+                    issuesContainer.innerHTML = `
+                        <div class="issues-list">
+                            <h3>Issues Detected:</h3>
+                            <ul>
+                                ${analysis.issues.map(issue => `<li>${issue}</li>`).join('')}
+                            </ul>
+                        </div>
+                    `;
                 } else {
-                    statusBadge.textContent = `No Refactor Needed (Confidence: ${confidence}%)`;
-                    statusBadge.className = 'status-badge status-ok';
+                    issuesContainer.innerHTML = '';
                 }
                 
             } catch (error) {
                 console.error('Error during refactoring process:', error);
-                resultCode.textContent = 'An error occurred. Please check the console for details and ensure your n8n webhook URL is correct.';
+                resultCode.textContent = 'An error occurred while calling the AI service. Please check the console for details.';
                 statusBadge.textContent = 'Error';
-                statusBadge.className = 'status-badge status-refactored'; // Use error color
+                statusBadge.className = 'status-badge status-refactored';
+                issuesContainer.innerHTML = '';
             } finally {
-                // 5. Hide the loader and show the result container
                 loader.style.display = 'none';
                 resultContainer.style.display = 'block';
             }
